@@ -60,7 +60,7 @@ The application handles the specific quirks of mobile contact exports:
 Ensure your server is structured as follows:
 
 ```text
-/contacts-hub/
+/public_html/contacts-hub/
 ├── index.html        # Main frontend entry point
 ├── style.css         # Dark theme and layout styles
 ├── app.js            # Parsing logic, API fetch, and UI rendering
