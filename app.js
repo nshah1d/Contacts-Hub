@@ -88,6 +88,7 @@ function parseCSV(content) {
     let iTitle = findCol(['Organization Title', 'Job Title', 'Title', 'Organization 1 - Title']);
     let iNote  = findCol(['Notes', 'Note']);
     let iBday  = findCol(['Birthday']);
+    let iPhoto = findCol(['Photo']);
 
     return lines.slice(1).map(line => {
         const row = splitLine(line);
@@ -114,7 +115,8 @@ function parseCSV(content) {
                 org: (iOrg > -1) ? row[iOrg] : '',
                 title: (iTitle > -1) ? row[iTitle] : '',
                 note: (iNote > -1) ? row[iNote] : '',
-                bday: (iBday > -1) ? row[iBday] : ''
+                bday: (iBday > -1) ? row[iBday] : '',
+                photo: (iPhoto > -1) ? row[iPhoto] : ''
             }
         };
 
