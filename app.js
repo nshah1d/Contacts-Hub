@@ -34,32 +34,129 @@ function loadFiles(fileList) {
 }
 
 function parseCSV(content) {
-    const lines = content.split(/\r\n|\n/);
-    if(lines.length < 2) return [];
+    if (content.charCodeAt(0) === 0xFEFF) {
+        content = content.slice(1);
+    }
+
+    const rawLines = content.split(/\r\n|\n/);
+    const lines = [];
+    let buffer = '';
     
-    const headers = lines[0].split(',').map(h => h.toLowerCase().trim().replace(/"/g, ''));
-    const findCol = (keys) => headers.findIndex(h => keys.some(k => h.includes(k)));
-    
-    const idxFN = findCol(['name', 'first', 'given']);
-    const idxTel = findCol(['phone', 'mobile', 'cell']);
-    const idxEmail = findCol(['email']);
-    const idxOrg = findCol(['organization', 'company']);
-    
-    let results = [];
-    for(let i=1; i<lines.length; i++) {
-        if(!lines[i].trim()) continue;
-        const row = lines[i].split(',').map(c => c.replace(/"/g, '').trim());
-        let name = row[idxFN] || "Unknown";
-        
-        if(name !== "Unknown") {
-            let contact = { display: { fn: name, tel: [], email: [], extras: [] } };
-            if(idxTel > -1 && row[idxTel]) contact.display.tel.push({ number: row[idxTel], type: "CSV" });
-            if(idxEmail > -1 && row[idxEmail]) contact.display.email.push({ email: row[idxEmail], type: "CSV" });
-            if(idxOrg > -1 && row[idxOrg]) contact.display.org = row[idxOrg];
-            results.push(contact);
+    for (let line of rawLines) {
+        buffer += (buffer ? '\n' : '') + line;
+        if ((buffer.match(/"/g) || []).length % 2 === 0) {
+            if (buffer.trim()) lines.push(buffer);
+            buffer = '';
         }
     }
-    return results.sort((a,b) => (a.display.fn||"").localeCompare(b.display.fn||""));
+    
+    if (lines.length < 2) return [];
+
+    const splitLine = (text) => {
+        let res = [], curr = '', inQ = false;
+        for (let i = 0; i < text.length; i++) {
+            let c = text[i];
+            if (c === '"') {
+                if (inQ && text[i + 1] === '"') { curr += '"'; i++; } 
+                else inQ = !inQ;
+            } else if (c === ',' && !inQ) {
+                res.push(curr); curr = '';
+            } else curr += c;
+        }
+        res.push(curr);
+        return res;
+    };
+
+    const headers = splitLine(lines[0]).map(h => h.trim().replace(/^"|"$/g, ''));
+
+    const findCol = (candidates) => {
+        const lowerHeaders = headers.map(h => h.toLowerCase());
+        for (let c of candidates) {
+            const idx = lowerHeaders.indexOf(c.toLowerCase());
+            if (idx > -1) return idx;
+        }
+        return -1;
+    };
+
+    const iFirst  = findCol(['First Name', 'Given Name', 'First']);
+    const iMiddle = findCol(['Middle Name', 'Additional Name', 'Middle']);
+    const iLast   = findCol(['Last Name', 'Family Name', 'Last', 'Surname']);
+    const iPrefix = findCol(['Name Prefix', 'Prefix']);
+    const iSuffix = findCol(['Name Suffix', 'Suffix']);
+
+    let iOrg   = findCol(['Organization Name', 'Company', 'Organization 1 - Name']);
+    let iTitle = findCol(['Organization Title', 'Job Title', 'Title', 'Organization 1 - Title']);
+    let iNote  = findCol(['Notes', 'Note']);
+    let iBday  = findCol(['Birthday']);
+
+    return lines.slice(1).map(line => {
+        const row = splitLine(line);
+        if (!row || row.length === 0) return null;
+
+        let nameParts = [];
+        if (iPrefix > -1 && row[iPrefix]) nameParts.push(row[iPrefix]);
+        if (iFirst > -1  && row[iFirst])  nameParts.push(row[iFirst]);
+        if (iMiddle > -1 && row[iMiddle]) nameParts.push(row[iMiddle]);
+        if (iLast > -1   && row[iLast])   nameParts.push(row[iLast]);
+        if (iSuffix > -1 && row[iSuffix]) nameParts.push(row[iSuffix]);
+
+        let fn = nameParts.join(' ').trim();
+
+        if (!fn && iOrg > -1 && row[iOrg]) fn = row[iOrg];
+        if (!fn) fn = "Unknown";
+
+        let contact = {
+            display: {
+                fn: fn,
+                tel: [],
+                email: [],
+                extras: [],
+                org: (iOrg > -1) ? row[iOrg] : '',
+                title: (iTitle > -1) ? row[iTitle] : '',
+                note: (iNote > -1) ? row[iNote] : '',
+                bday: (iBday > -1) ? row[iBday] : ''
+            }
+        };
+
+        headers.forEach((h, i) => {
+            if (!row[i]) return;
+            const lowerH = h.toLowerCase();
+
+            if (lowerH.includes('phone') && lowerH.includes('value')) {
+                let typeH = h.replace(/Value/i, 'Type').replace(/value/i, 'Label'); 
+                let typeIdx = headers.indexOf(typeH);
+                
+                if(typeIdx === -1) {
+                    if (headers[i-1] && headers[i-1].toLowerCase().includes('label')) typeIdx = i-1;
+                }
+                
+                let type = (typeIdx > -1) ? row[typeIdx] : 'Mobile';
+                type = type.replace(/[*]/g, '').trim() || 'Mobile';
+
+                const rawValue = row[i];
+                if (rawValue) {
+                    const numbers = rawValue.includes(':::') ? rawValue.split(':::') : [rawValue];
+                    
+                    numbers.forEach(num => {
+                        if (num.trim()) {
+                            contact.display.tel.push({ number: num.trim(), type: type });
+                        }
+                    });
+                }
+            }
+            else if ((lowerH.includes('e-mail') || lowerH.includes('email')) && lowerH.includes('value')) {
+                let typeIdx = i - 1;
+                let type = (typeIdx > -1) ? row[typeIdx] : 'Home';
+                type = type.replace(/[*]/g, '').trim() || 'Home';
+                contact.display.email.push({ email: row[i], type: type });
+            }
+            else if (lowerH.includes('address') && lowerH.includes('formatted')) {
+                 if (!contact.display.adr) contact.display.adr = row[i].replace(/\n/g, ', ');
+            }
+        });
+
+        return contact;
+    }).filter(Boolean).sort((a, b) => (a.display.fn || "").localeCompare(b.display.fn || ""));
 }
 
 function parseVCF(content) {
@@ -114,7 +211,6 @@ function parseVCF(content) {
                 else if(cleanKey === 'TITLE') contact.display.title = value;
                 else if(cleanKey === 'NOTE') contact.display.note = value;
                 else if(cleanKey === 'PHOTO') contact.display.photo = value;
-                
                 else if(cleanKey === 'ADR') {
                     let clean = value.replace(/\\n/g, ', ').replace(/\\,/g, ',').replace(/;/g, ' ');
                     contact.display.adr = clean.replace(/\s+/g, ' ').trim();
